@@ -3,7 +3,6 @@ import type { WorkspaceDocument } from '../../shared/models'
 export const STORAGE_KEY = 'focusdesk.document.v1'
 const DATABASE_NAME = 'focusdesk-db'
 const STORE_NAME = 'workspace'
-
 export interface StorageService {
   read(): Promise<string | null>
   write(value: string): Promise<void>
@@ -55,10 +54,4 @@ function writeToDatabase(database: IDBDatabase, value: string): Promise<void> {
     request.onsuccess = () => resolve()
     request.onerror = () => reject(request.error ?? new Error('IndexedDB write failed'))
   })
-}
-
-export function isWorkspaceDocument(value: unknown): value is WorkspaceDocument {
-  if (!value || typeof value !== 'object') return false
-  const candidate = value as Partial<WorkspaceDocument>
-  return candidate.version === 1 && Array.isArray(candidate.plans) && typeof candidate.activePlanId === 'string'
 }

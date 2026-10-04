@@ -20,4 +20,23 @@ describe('local workspace repository', () => {
     const repository = new LocalWorkspaceRepository(memoryStorage('{broken'))
     await expect(repository.load()).resolves.toBeNull()
   })
+
+  it('migrates legacy plans whose items have no name field', async () => {
+    const legacy = JSON.stringify({
+      version: 1,
+      activePlanId: 'plan-1',
+      plans: [{
+        id: 'plan-1',
+        name: '老方案',
+        deskWidthMm: 1600,
+        deskHeightMm: 800,
+        updatedAt: '2026-09-01T00:00:00.000Z',
+        items: [{ id: 'item-1', type: 'monitor', widthMm: 540, heightMm: 210, x: 0, y: 0, rotation: 0 }],
+      }],
+    })
+    const repository = new LocalWorkspaceRepository(memoryStorage(legacy))
+    const loaded = await repository.load()
+    expect(loaded?.plans[0].items[0]).toMatchObject({ id: 'item-1', type: 'monitor' })
+    expect(loaded?.plans[0].items[0].name).toBeUndefined()
+  })
 })

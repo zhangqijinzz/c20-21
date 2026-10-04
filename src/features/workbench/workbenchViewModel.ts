@@ -3,6 +3,9 @@ import {
   createId,
   createInitialDocument,
   createPlan,
+  duplicatePlanItems,
+  normalizeItemName,
+  normalizeItemNote,
   type DeskItem,
   type DeviceType,
   type LayoutAnalysis,
@@ -14,7 +17,10 @@ import { clampDeskSize, clampItemDimension } from '../../shared/layoutRules'
 import { moveCanvasItem, rotateCanvasItem } from '../canvas/canvasViewModel'
 import { createMaterialDraft } from '../materials/materialsViewModel'
 import { inspectPlan } from '../inspection/inspectionViewModel'
+import { buildDeviceInventory, type DeviceInventory } from '../inventory/inventoryViewModel'
 import { LocalWorkspaceRepository, type WorkspaceRepository } from './workspaceRepository'
+
+const FOCUS_HIGHLIGHT_MS = 1800
 
 export interface WorkspaceViewModel {
   status: WorkspaceStatus
@@ -24,6 +30,9 @@ export interface WorkspaceViewModel {
   analysis: LayoutAnalysis
   issueIds: string[]
   issueCount: number
+  inventory: DeviceInventory
+  /** 清单点击定位时，画布上短暂高亮的设备 */
+  focusedItemId: string | null
   feedback: string
   isPreviewOpen: boolean
   selectItem: (id: string | null) => void
@@ -32,6 +41,9 @@ export interface WorkspaceViewModel {
   moveItem: (id: string, x: number, y: number) => void
   rotateItem: (id: string, delta: number) => void
   updateItem: (id: string, patch: Partial<Pick<DeskItem, 'widthMm' | 'heightMm' | 'x' | 'y'>>) => void
+  renameItem: (id: string, name: string) => void
+  updateItemNote: (id: string, note: string) => void
+  locateItem: (id: string) => void
   updateDesk: (field: 'deskWidthMm' | 'deskHeightMm', value: number) => void
   createNewPlan: () => void
   duplicatePlan: () => void
@@ -42,14 +54,19 @@ export interface WorkspaceViewModel {
 }
 
 const emptyInspection = { analysis: { overlapIds: [], outOfBoundsIds: [], coveragePercent: 0, status: 'clear' as const }, issueIds: [], issueCount: 0 }
+const emptyInventory: DeviceInventory = { rows: [], totalCount: 0, issueCount: 0 }
 
 export function useWorkspaceViewModel(repository?: WorkspaceRepository): WorkspaceViewModel {
   const repositoryRef = useRef(repository ?? new LocalWorkspaceRepository())
   const [status, setStatus] = useState<WorkspaceStatus>('loading')
   const [document, setDocument] = useState<WorkspaceDocument | null>(null)
   const [selectedItemId, setSelectedItemId] = useState<string | null>(null)
+  const [focusedItemId, setFocusedItemId] = useState<string | null>(null)
   const [isPreviewOpen, setIsPreviewOpen] = useState(false)
   const [feedback, setFeedback] = useState('正在准备你的工作台…')
+  const focusTimerRef = useRef<number | undefined>(undefined)
+
+  useEffect(() => () => window.clearTimeout(focusTimerRef.current), [])
 
   useEffect(() => {
     let active = true
@@ -75,6 +92,7 @@ export function useWorkspaceViewModel(repository?: WorkspaceRepository): Workspa
   const selectedItem = activePlan?.items.find((item) => item.id === selectedItemId) ?? null
   const inspection = useMemo(() => activePlan ? inspectPlan(activePlan) : emptyInspection, [activePlan])
   const { analysis, issueIds, issueCount } = inspection
+  const inventory = useMemo(() => activePlan ? buildDeviceInventory(activePlan, analysis) : emptyInventory, [activePlan, analysis])
 
   const persist = useCallback(async (nextDocument: WorkspaceDocument, message: string) => {
     setDocument(nextDocument)
@@ -108,6 +126,7 @@ export function useWorkspaceViewModel(repository?: WorkspaceRepository): Workspa
   const removeItem = useCallback((id: string) => {
     updateActivePlan((plan) => ({ ...plan, items: plan.items.filter((item) => item.id !== id) }), '设备已移除')
     setSelectedItemId((current) => current === id ? null : current)
+    setFocusedItemId((current) => current === id ? null : current)
   }, [updateActivePlan])
 
   const moveItem = useCallback((id: string, x: number, y: number) => {
@@ -130,6 +149,34 @@ export function useWorkspaceViewModel(repository?: WorkspaceRepository): Workspa
     }), '尺寸参数已更新')
   }, [updateActivePlan])
 
+  const renameItem = useCallback((id: string, value: string) => {
+    const name = normalizeItemName(value)
+    updateActivePlan((plan) => ({
+      ...plan,
+      items: plan.items.map((item) => item.id === id ? { ...item, name } : item),
+    }), name ? '设备已重命名' : '已恢复为类型名')
+  }, [updateActivePlan])
+
+  const updateItemNote = useCallback((id: string, value: string) => {
+    const note = normalizeItemNote(value)
+    updateActivePlan((plan) => ({
+      ...plan,
+      items: plan.items.map((item) => item.id === id ? { ...item, note } : item),
+    }), note ? '备注已保存' : '备注已清空')
+  }, [updateActivePlan])
+
+  /**
+   * 清单点击定位：选中设备并让画布上的对应设备短暂高亮闪烁，
+   * 让十几件设备也能一眼对应到画布位置。
+   */
+  const locateItem = useCallback((id: string) => {
+    if (!activePlan?.items.some((item) => item.id === id)) return
+    setSelectedItemId(id)
+    setFocusedItemId(id)
+    window.clearTimeout(focusTimerRef.current)
+    focusTimerRef.current = window.setTimeout(() => setFocusedItemId(null), FOCUS_HIGHLIGHT_MS)
+  }, [activePlan])
+
   const updateDesk = useCallback((field: 'deskWidthMm' | 'deskHeightMm', value: number) => {
     if (!activePlan) return
     updateActivePlan((plan) => ({ ...plan, [field]: clampDeskSize(value, plan[field]) }), '桌面尺寸已更新')
@@ -140,6 +187,7 @@ export function useWorkspaceViewModel(repository?: WorkspaceRepository): Workspa
     const plan = createPlan(`工作台 ${document.plans.length + 1}`, false)
     void persist({ ...document, plans: [...document.plans, plan], activePlanId: plan.id }, '已创建空白方案')
     setSelectedItemId(null)
+    setFocusedItemId(null)
   }, [document, persist])
 
   const duplicatePlan = useCallback(() => {
@@ -148,17 +196,20 @@ export function useWorkspaceViewModel(repository?: WorkspaceRepository): Workspa
       ...activePlan,
       id: createId('plan'),
       name: `${activePlan.name} · 副本`,
-      items: activePlan.items.map((item) => ({ ...item, id: createId('item') })),
+      // 逐件复制并保留 name / note，名字跟着设备走
+      items: duplicatePlanItems(activePlan.items),
       updatedAt: new Date().toISOString(),
     }
     void persist({ ...document, plans: [...document.plans, copy], activePlanId: copy.id }, '方案已复制')
     setSelectedItemId(null)
+    setFocusedItemId(null)
   }, [activePlan, document, persist])
 
   const selectPlan = useCallback((id: string) => {
     if (!document || !document.plans.some((plan) => plan.id === id)) return
     void persist({ ...document, activePlanId: id }, '已切换方案')
     setSelectedItemId(null)
+    setFocusedItemId(null)
   }, [document, persist])
 
   const deleteCurrentPlan = useCallback(() => {
@@ -169,6 +220,7 @@ export function useWorkspaceViewModel(repository?: WorkspaceRepository): Workspa
     const remaining = document.plans.filter((plan) => plan.id !== activePlan.id)
     void persist({ ...document, plans: remaining, activePlanId: remaining[0].id }, '方案已删除')
     setSelectedItemId(null)
+    setFocusedItemId(null)
   }, [activePlan, document, persist])
 
   const openPreview = useCallback(() => setIsPreviewOpen(true), [])
@@ -182,6 +234,8 @@ export function useWorkspaceViewModel(repository?: WorkspaceRepository): Workspa
     analysis,
     issueIds,
     issueCount,
+    inventory,
+    focusedItemId,
     feedback,
     isPreviewOpen,
     selectItem,
@@ -190,6 +244,9 @@ export function useWorkspaceViewModel(repository?: WorkspaceRepository): Workspa
     moveItem,
     rotateItem,
     updateItem,
+    renameItem,
+    updateItemNote,
+    locateItem,
     updateDesk,
     createNewPlan,
     duplicatePlan,

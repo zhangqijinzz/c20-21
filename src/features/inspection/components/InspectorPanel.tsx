@@ -1,6 +1,6 @@
 import { AlertTriangle, Crosshair, RotateCcw, RotateCw, Ruler, Trash2 } from 'lucide-react'
 import type { DeskItem, WorkspacePlan } from '../../../shared/models'
-import { getDeviceDefinition } from '../../../shared/models'
+import { getDeviceDefinition, getItemDisplayName, MAX_ITEM_NAME_LENGTH, MAX_ITEM_NOTE_LENGTH } from '../../../shared/models'
 
 interface InspectorPanelProps {
   plan: WorkspacePlan
@@ -8,6 +8,8 @@ interface InspectorPanelProps {
   issueIds: string[]
   onUpdateDesk: (field: 'deskWidthMm' | 'deskHeightMm', value: number) => void
   onUpdateItem: (id: string, patch: Partial<Pick<DeskItem, 'widthMm' | 'heightMm' | 'x' | 'y'>>) => void
+  onRename: (id: string, name: string) => void
+  onUpdateNote: (id: string, note: string) => void
   onRotate: (id: string, delta: number) => void
   onDelete: (id: string) => void
 }
@@ -16,9 +18,10 @@ function NumericField({ label, value, onChange }: { label: string; value: number
   return <label className="numeric-field"><span>{label}</span><input type="number" value={value} min={40} onChange={(event) => onChange(event.currentTarget.valueAsNumber)} /><em>mm</em></label>
 }
 
-export function InspectorPanel({ plan, item, issueIds, onUpdateDesk, onUpdateItem, onRotate, onDelete }: InspectorPanelProps) {
+export function InspectorPanel({ plan, item, issueIds, onUpdateDesk, onUpdateItem, onRename, onUpdateNote, onRotate, onDelete }: InspectorPanelProps) {
   const isIssue = item ? issueIds.includes(item.id) : false
   const definition = item ? getDeviceDefinition(item.type) : null
+  const displayName = item ? getItemDisplayName(item) : ''
   return (
     <aside className="inspector-panel">
       <div className="module-heading">
@@ -35,8 +38,29 @@ export function InspectorPanel({ plan, item, issueIds, onUpdateDesk, onUpdateIte
       </div>
       {item && definition ? (
         <div className="item-editor">
-          <div className="selected-item-heading"><span className="selected-swatch" style={{ backgroundColor: definition.color }} /> <div><strong>{definition.label}</strong><small>{definition.hint}</small></div><span className="item-code">{definition.shortLabel}</span></div>
+          <div className="selected-item-heading"><span className="selected-swatch" style={{ backgroundColor: definition.color }} /> <div><strong>{displayName}</strong><small>{definition.label} · {definition.hint}</small></div><span className="item-code">{definition.shortLabel}</span></div>
           {isIssue && <div className="issue-callout"><AlertTriangle size={16} /><span>设备与其他元素重叠或超出桌面边界</span></div>}
+          <div className="field-heading"><span>设备名称</span><span className="unit-label">不填则显示类型名</span></div>
+          <label className="text-field">
+            <input
+              value={item.name ?? ''}
+              placeholder={definition.label}
+              maxLength={MAX_ITEM_NAME_LENGTH}
+              aria-label="设备名称"
+              onChange={(event) => onRename(item.id, event.currentTarget.value)}
+            />
+          </label>
+          <div className="field-heading note-heading"><span>备注</span><span className="unit-label">仅本方案内可见</span></div>
+          <label className="text-field">
+            <textarea
+              value={item.note ?? ''}
+              placeholder="写点备注，比如用途、型号、摆放要求…"
+              maxLength={MAX_ITEM_NOTE_LENGTH}
+              rows={3}
+              aria-label="设备备注"
+              onChange={(event) => onUpdateNote(item.id, event.currentTarget.value)}
+            />
+          </label>
           <div className="field-heading"><span>实际尺寸</span><span className="unit-label">单位：毫米</span></div>
           <div className="two-column-fields">
             <NumericField label="宽度" value={item.widthMm} onChange={(value) => onUpdateItem(item.id, { widthMm: value })} />
@@ -51,7 +75,7 @@ export function InspectorPanel({ plan, item, issueIds, onUpdateDesk, onUpdateIte
           <button className="remove-item-button" onClick={() => onDelete(item.id)} type="button"><Trash2 size={15} /> 移除这个设备</button>
         </div>
       ) : (
-        <div className="empty-inspector"><span className="empty-illustration">⌖</span><strong>选择一个设备</strong><p>点击画布上的设备查看尺寸、位置和旋转控制。</p></div>
+        <div className="empty-inspector"><span className="empty-illustration">⌖</span><strong>选择一个设备</strong><p>点击画布上的设备查看名称、备注、尺寸、位置和旋转控制。</p></div>
       )}
     </aside>
   )

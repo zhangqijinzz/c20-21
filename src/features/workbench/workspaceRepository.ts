@@ -1,5 +1,5 @@
-import { createInitialDocument, type WorkspaceDocument } from '../../shared/models'
-import { BrowserStorageService, isWorkspaceDocument, type StorageService } from './storageService'
+import { createInitialDocument, normalizeWorkspaceDocument, type WorkspaceDocument } from '../../shared/models'
+import { BrowserStorageService, type StorageService } from './storageService'
 
 export interface WorkspaceRepository {
   load(): Promise<WorkspaceDocument | null>
@@ -14,7 +14,8 @@ export class LocalWorkspaceRepository implements WorkspaceRepository {
       const raw = await this.storage.read()
       if (!raw) return null
       const parsed: unknown = JSON.parse(raw)
-      return isWorkspaceDocument(parsed) ? parsed : null
+      // 同时承担结构校验与旧方案迁移：补全缺失字段、清掉空白名字
+      return normalizeWorkspaceDocument(parsed)
     } catch {
       return null
     }
